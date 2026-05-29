@@ -170,4 +170,18 @@ public class TransaksiDAO {
         } catch (SQLException e) { e.printStackTrace(); }
         return details.toArray(new Object[0][]);
     }
+
+    public long getTotalProdukTerjualInRange(java.util.Date start, java.util.Date endPlusOne) {
+        String sql = "SELECT COALESCE(SUM(d.jumlah), 0) FROM detail_transaksi d " +
+                    "JOIN transaksi t ON d.id_transaksi = t.id_transaksi " +
+                    "WHERE t.status = 'selesai' AND t.tanggal >= ? AND t.tanggal < ?";
+        try (Connection conn = Koneksi.getConnection();
+            PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setTimestamp(1, new java.sql.Timestamp(start.getTime()));
+            ps.setTimestamp(2, new java.sql.Timestamp(endPlusOne.getTime()));
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) return rs.getLong(1);
+        } catch (SQLException e) { e.printStackTrace(); }
+        return 0;
+    }
 }
