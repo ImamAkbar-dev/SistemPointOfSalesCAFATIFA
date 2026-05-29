@@ -43,3 +43,4 @@ Sebagai bentuk pemenuhan standar tugas Pemrograman Berorientasi Objek, sistem in
 6. Pergi Ke terminal VScode kemudian ketik directori file. Contoh : cd C:\PenjualanCAFATIFA
 7. Ketik pada terminal di VScode javac -cp ".;lib\mysql-connector-j-9.6.0.jar;lib\jfreechart-1.5.6.jar" -d . Database\*.java ModelLogic\*.java UI\*.java UI\Admin\*.java UI\Kasir\*.java Main\*.java
 8. Jika sudah maka lanjutkan ketik ini kemudian enter java -cp ".;lib\mysql-connector-j-9.6.0.jar;lib\jfreechart-1.5.6.jar" Main.Main
+9. Jika ingin Mengedit Program maka ketik Get-ChildItem -Recurse -Filter *.class | Remove-Item. Kemudian ulangi lanhkah 7 dan 8.
