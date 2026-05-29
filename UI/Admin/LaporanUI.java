@@ -1,7 +1,6 @@
 package UI.Admin;
 
 import ModelLogic.Admin;
-import ModelLogic.Transaksi;
 import Database.TransaksiDAO;
 import UI.ErrorUI;
 import UI.LoginUI;
@@ -9,6 +8,8 @@ import UI.LogoutUI;
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartPanel;
 import org.jfree.chart.JFreeChart;
+import org.jfree.chart.plot.CategoryPlot;
+import org.jfree.chart.renderer.category.BarRenderer;
 import org.jfree.data.category.DefaultCategoryDataset;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -67,11 +68,31 @@ public class LaporanUI extends JFrame {
 
         add(main, BorderLayout.CENTER);
 
-        LocalDate end = LocalDate.now();
-        LocalDate start = end.minusDays(6);
-        tfStartDate.setText(start.format(DateTimeFormatter.ISO_LOCAL_DATE));
-        tfEndDate.setText(end.format(DateTimeFormatter.ISO_LOCAL_DATE));
-        loadChart("Hari", tfStartDate.getText(), tfEndDate.getText());
+        // Set default periode dari tanggal pertama transaksi sampai tanggal terakhir
+        setDefaultPeriod();
+    }
+
+    private void setDefaultPeriod() {
+        TransaksiDAO dao = new TransaksiDAO();
+        List<Object[]> all = dao.getAllTransaksi();
+        if (all.isEmpty()) {
+            LocalDate today = LocalDate.now();
+            tfStartDate.setText(today.format(DateTimeFormatter.ISO_LOCAL_DATE));
+            tfEndDate.setText(today.format(DateTimeFormatter.ISO_LOCAL_DATE));
+        } else {
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+            Date minDate = null;
+            Date maxDate = null;
+            for (Object[] row : all) {
+                java.sql.Timestamp ts = (java.sql.Timestamp) row[1];
+                Date tgl = new Date(ts.getTime());
+                if (minDate == null || tgl.before(minDate)) minDate = tgl;
+                if (maxDate == null || tgl.after(maxDate)) maxDate = tgl;
+            }
+            tfStartDate.setText(sdf.format(minDate));
+            tfEndDate.setText(sdf.format(maxDate));
+        }
+        loadChartAndSummary("Hari", tfStartDate.getText(), tfEndDate.getText());
     }
 
     private JPanel createSidebar() {
@@ -126,7 +147,7 @@ public class LaporanUI extends JFrame {
             String start = tfStartDate.getText().trim();
             String end = tfEndDate.getText().trim();
             if (isDateValid(start, end)) {
-                loadChart((String) cbPeriode.getSelectedItem(), start, end);
+                loadChartAndSummary((String) cbPeriode.getSelectedItem(), start, end);
             } else {
                 ErrorUI.showError(this, "Periode akhir tidak boleh lebih kecil dari periode awal!");
             }
@@ -197,24 +218,31 @@ public class LaporanUI extends JFrame {
         return panel;
     }
 
-    private void loadChart(String periode, String startDate, String endDate) {
+    private void loadChartAndSummary(String periode, String startDate, String endDate) {
         TransaksiDAO dao = new TransaksiDAO();
         List<Object[]> all = dao.getAllTransaksi();
 
         Map<String, Integer> dataMap = new LinkedHashMap<>();
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+        long totalPenjualan = 0;
+        long totalTransaksi = 0;
+        long totalProduk = 0;
 
-        // Data grafik dari database 
         try {
             Date start = sdf.parse(startDate);
             Date end = sdf.parse(endDate);
+            Calendar calEnd = Calendar.getInstance();
+            calEnd.setTime(end);
+            calEnd.add(Calendar.DAY_OF_MONTH, 1);
+            Date endPlusOne = calEnd.getTime();
+
             Calendar cal = Calendar.getInstance();
 
             for (Object[] row : all) {
                 if (!"selesai".equals(row[4])) continue;
                 java.sql.Timestamp ts = (java.sql.Timestamp) row[1];
                 Date tgl = new Date(ts.getTime());
-                if (tgl.before(start) || tgl.after(end)) continue;
+                if (tgl.before(start) || !tgl.before(endPlusOne)) continue;
 
                 String key;
                 cal.setTime(tgl);
@@ -227,26 +255,38 @@ public class LaporanUI extends JFrame {
                 }
                 int total = (int) row[2];
                 dataMap.put(key, dataMap.getOrDefault(key, 0) + total);
+                totalPenjualan += total;
+                totalTransaksi++;
             }
+
+            // Hitung total produk terjual dalam rentang
+            totalProduk = dao.getTotalProdukTerjualInRange(start, endPlusOne);
+
         } catch (Exception e) {
             e.printStackTrace();
         }
 
-        // 🔹 Ambil nilai ringkasan dari static variabel Transaksi (akumulasi runtime)
-        lblTotalPenjualan.setText(formatRupiah((long) Transaksi.totalPemasukan));
-        lblTotalTransaksi.setText(String.valueOf(Transaksi.totalTransaksi));
-        lblProdukTerjual.setText(String.valueOf(Transaksi.totalProdukTerjual));
+        lblTotalPenjualan.setText(formatRupiah(totalPenjualan));
+        lblTotalTransaksi.setText(String.valueOf(totalTransaksi));
+        lblProdukTerjual.setText(String.valueOf(totalProduk));
 
         lblPeriodeRange.setText("Periode " + formatTanggal(startDate) + " - " + formatTanggal(endDate));
 
         DefaultCategoryDataset dataset = new DefaultCategoryDataset();
-        for (Map.Entry<String, Integer> entry : dataMap.entrySet()) {
-            dataset.addValue(entry.getValue(), "Penjualan", entry.getKey());
+        List<String> sortedKeys = new ArrayList<>(dataMap.keySet());
+        Collections.sort(sortedKeys);
+        for (String key : sortedKeys) {
+            dataset.addValue(dataMap.get(key), "Penjualan", key);
         }
 
         JFreeChart chart = ChartFactory.createBarChart(
                 "", "Periode", "Jumlah (Rp)", dataset);
         chart.setBackgroundPaint(Color.WHITE);
+        CategoryPlot plot = chart.getCategoryPlot();
+        BarRenderer renderer = (BarRenderer) plot.getRenderer();
+        renderer.setSeriesPaint(0, new Color(0, 153, 0));
+        renderer.setSeriesOutlinePaint(0, Color.BLACK);
+
         ChartPanel chartPanel = new ChartPanel(chart);
         chartPanelContainer.removeAll();
         chartPanelContainer.add(chartPanel, BorderLayout.CENTER);
