@@ -11,6 +11,10 @@ import UI.LogoutUI;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.text.AbstractDocument;
+import javax.swing.text.AttributeSet;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.DocumentFilter;
 import java.awt.*;
 import java.util.ArrayList;
 import java.util.List;
@@ -32,9 +36,9 @@ public class TransaksiMasukUI extends JFrame {
     private JTable tableTransaksiDiproses;
     private DefaultTableModel modelTransaksiDiproses;
 
-    private List<Object[]> keranjangItems; // {idProduk, nama, harga, jumlah, subtotal}
-    
-    // Mode edit
+    private List<Object[]> keranjangItems;
+    private List<Integer> originalStok;
+
     private boolean isEditMode = false;
     private int editingIdTransaksi = -1;
     private JButton btnBuatPesanan;
@@ -45,6 +49,7 @@ public class TransaksiMasukUI extends JFrame {
         this.produkDAO = new ProdukDAO();
         this.transaksiDAO = new TransaksiDAO();
         this.keranjangItems = new ArrayList<>();
+        this.originalStok = new ArrayList<>();
 
         setTitle("Pesanan Masuk - CAFATIFA");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -58,11 +63,10 @@ public class TransaksiMasukUI extends JFrame {
         JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
         splitPane.setResizeWeight(0.6);
 
-        // Panel atas: Daftar produk + Keranjang
         JPanel topPanel = new JPanel(new BorderLayout(10, 10));
         topPanel.setBorder(new EmptyBorder(10, 10, 10, 10));
 
-        // Daftar produk
+        // Panel Daftar Produk
         JPanel produkPanel = new JPanel(new BorderLayout());
         produkPanel.setBorder(BorderFactory.createTitledBorder("Daftar Produk"));
         modelProduk = new DefaultTableModel(new String[]{"ID", "Nama", "Harga", "Stok"}, 0);
@@ -72,18 +76,19 @@ public class TransaksiMasukUI extends JFrame {
         JPanel inputPanel = new JPanel(new FlowLayout());
         inputPanel.add(new JLabel("ID Produk:"));
         tfIdProduk = new JTextField(5);
+        ((AbstractDocument) tfIdProduk.getDocument()).setDocumentFilter(new DigitOnlyFilter());
         inputPanel.add(tfIdProduk);
         inputPanel.add(new JLabel("Jumlah:"));
         tfJumlah = new JTextField(5);
+        ((AbstractDocument) tfJumlah.getDocument()).setDocumentFilter(new DigitOnlyFilter());
         inputPanel.add(tfJumlah);
         btnTambahKeKeranjang = new JButton("Tambah");
         inputPanel.add(btnTambahKeKeranjang);
         produkPanel.add(inputPanel, BorderLayout.SOUTH);
 
-        // Keranjang dengan tombol hapus
+        // Panel Keranjang
         JPanel keranjangPanel = new JPanel(new BorderLayout());
         keranjangPanel.setBorder(BorderFactory.createTitledBorder("Keranjang Pesanan"));
-        // Tabel di menu keranjang
         modelKeranjang = new DefaultTableModel(new String[]{"ID Produk", "Nama", "Harga", "Jumlah", "Subtotal", "Aksi"}, 0) {
             @Override
             public Class<?> getColumnClass(int columnIndex) {
@@ -92,7 +97,7 @@ public class TransaksiMasukUI extends JFrame {
             }
             @Override
             public boolean isCellEditable(int row, int column) {
-                return column == 5; // hanya kolom Aksi yang bisa diklik
+                return column == 5;
             }
         };
         tableKeranjang = new JTable(modelKeranjang);
@@ -115,10 +120,9 @@ public class TransaksiMasukUI extends JFrame {
         topPanel.add(topSplit, BorderLayout.CENTER);
         splitPane.setTopComponent(topPanel);
 
-        
+        // Panel bawah: Transaksi Diproses
         JPanel bottomPanel = new JPanel(new BorderLayout());
         bottomPanel.setBorder(BorderFactory.createTitledBorder("Pesanan Masuk (Diproses)"));
-        // Kolom Tabel
         modelTransaksiDiproses = new DefaultTableModel(new String[]{"ID Order", "Tanggal", "Total Harga", "Kasir", "Bayar", "Edit", "Hapus"}, 0) {
             @Override
             public Class<?> getColumnClass(int columnIndex) {
@@ -131,7 +135,6 @@ public class TransaksiMasukUI extends JFrame {
             }
         };
         tableTransaksiDiproses = new JTable(modelTransaksiDiproses);
-        // Renderer & Editor untuk masing-masing kolom tombol
         tableTransaksiDiproses.getColumnModel().getColumn(4).setCellRenderer(new AksiButtonRenderer("Bayar"));
         tableTransaksiDiproses.getColumnModel().getColumn(4).setCellEditor(new AksiButtonEditor(new JCheckBox(), 4));
         tableTransaksiDiproses.getColumnModel().getColumn(5).setCellRenderer(new AksiButtonRenderer("Edit"));
@@ -148,13 +151,26 @@ public class TransaksiMasukUI extends JFrame {
 
         btnTambahKeKeranjang.addActionListener(e -> tambahKeKeranjang());
         btnBuatPesanan.addActionListener(e -> {
-            if (isEditMode) {
-                simpanEdit();
-            } else {
-                buatPesanan();
-            }
+            if (isEditMode) simpanEdit();
+            else buatPesanan();
         });
         btnBatalEdit.addActionListener(e -> batalkanEdit());
+    }
+
+    // Filter hanya angka untuk ID dan Jumlah
+    class DigitOnlyFilter extends DocumentFilter {
+        @Override
+        public void insertString(FilterBypass fb, int offset, String string, AttributeSet attr) throws BadLocationException {
+            if (string != null && string.matches("\\d*")) {
+                super.insertString(fb, offset, string, attr);
+            }
+        }
+        @Override
+        public void replace(FilterBypass fb, int offset, int length, String text, AttributeSet attrs) throws BadLocationException {
+            if (text != null && text.matches("\\d*")) {
+                super.replace(fb, offset, length, text, attrs);
+            }
+        }
     }
 
     private void loadProduk() {
@@ -175,29 +191,60 @@ public class TransaksiMasukUI extends JFrame {
 
     private void tambahKeKeranjang() {
         try {
-            int idProduk = Integer.parseInt(tfIdProduk.getText());
-            int jumlah = Integer.parseInt(tfJumlah.getText());
+            String idText = tfIdProduk.getText().trim();
+            String jmlText = tfJumlah.getText().trim();
+            if (idText.isEmpty() || jmlText.isEmpty()) {
+                ErrorUI.showError(this, "ID Produk dan Jumlah harus diisi!");
+                return;
+            }
+            int idProduk = Integer.parseInt(idText);
+            int jumlah = Integer.parseInt(jmlText);
             if (jumlah <= 0) {
                 ErrorUI.showError(this, "Jumlah harus lebih dari 0!");
                 return;
             }
-            Produk p = produkDAO.getProdukById(idProduk);
-            if (p == null) {
+
+            // Cari produk di tabel (stok di memori)
+            int rowProduk = -1;
+            int stokTersedia = 0;
+            for (int i = 0; i < modelProduk.getRowCount(); i++) {
+                if ((int) modelProduk.getValueAt(i, 0) == idProduk) {
+                    rowProduk = i;
+                    stokTersedia = (int) modelProduk.getValueAt(i, 3);
+                    break;
+                }
+            }
+            if (rowProduk == -1) {
                 ErrorUI.showError(this, "Produk tidak ditemukan");
                 return;
             }
-            if (p.getStok() < jumlah) {
-                ErrorUI.showError(this, "Stok tidak cukup! Stok tersedia: " + p.getStok());
+            if (stokTersedia < jumlah) {
+                ErrorUI.showError(this, "Stok tidak cukup! Stok tersedia: " + stokTersedia);
                 return;
             }
-            int subtotal = p.getHarga() * jumlah;
+
+            String nama = (String) modelProduk.getValueAt(rowProduk, 1);
+            int harga = (int) modelProduk.getValueAt(rowProduk, 2);
+            int subtotal = harga * jumlah;
+
+            boolean found = false;
             for (Object[] item : keranjangItems) {
                 if ((int) item[0] == idProduk) {
-                    ErrorUI.showError(this, "Produk sudah ada di keranjang. Hapus dulu jika ingin mengubah.");
-                    return;
+                    int newJumlah = (int) item[3] + jumlah;
+                    int newSubtotal = (int) item[2] * newJumlah;
+                    item[3] = newJumlah;
+                    item[4] = newSubtotal;
+                    found = true;
+                    break;
                 }
             }
-            keranjangItems.add(new Object[]{idProduk, p.getNama(), p.getHarga(), jumlah, subtotal});
+            if (!found) {
+                keranjangItems.add(new Object[]{idProduk, nama, harga, jumlah, subtotal});
+            }
+
+            // Kurangi stok di tabel produk (visual)
+            modelProduk.setValueAt(stokTersedia - jumlah, rowProduk, 3);
+
             updateKeranjangTable();
             tfIdProduk.setText("");
             tfJumlah.setText("");
@@ -232,19 +279,37 @@ public class TransaksiMasukUI extends JFrame {
             updateKeranjangTable();
             JOptionPane.showMessageDialog(this, "Pesanan berhasil dibuat! ID Transaksi: " + kasir.getIdTransaksiAktif());
             loadTransaksiDiproses();
+            loadProduk(); // refresh stok dari database
         } catch (Exception ex) {
             ex.printStackTrace();
             ErrorUI.showError(this, "Gagal membuat pesanan: " + ex.getMessage());
         }
     }
 
-    // EDIT TRANSAKSI
+    private void hapusProdukDariKeranjang(int row) {
+        Object[] item = keranjangItems.get(row);
+        int idProduk = (int) item[0];
+        int jumlahDiKeranjang = (int) item[3];
+        for (int i = 0; i < modelProduk.getRowCount(); i++) {
+            if ((int) modelProduk.getValueAt(i, 0) == idProduk) {
+                int stokLama = (int) modelProduk.getValueAt(i, 3);
+                modelProduk.setValueAt(stokLama + jumlahDiKeranjang, i, 3);
+                break;
+            }
+        }
+        keranjangItems.remove(row);
+        updateKeranjangTable();
+    }
+
     private void mulaiEdit(int idTransaksi) {
-        // Ambil detail transaksi dari database
+        originalStok.clear();
+        for (int i = 0; i < modelProduk.getRowCount(); i++) {
+            originalStok.add((int) modelProduk.getValueAt(i, 3));
+        }
+
         List<Object[]> details = new ArrayList<>();
         Object[][] rawDetails = transaksiDAO.getDetailTransaksiWithPayment(idTransaksi);
         for (Object[] row : rawDetails) {
-            // row: [id_produk, nama_produk, jumlah, harga_satuan, subtotal, ...]
             if (row[0] != null) {
                 int idProduk = (int) row[0];
                 String nama = (String) row[1];
@@ -252,31 +317,34 @@ public class TransaksiMasukUI extends JFrame {
                 int jumlah = (int) row[2];
                 int subtotal = (int) row[4];
                 details.add(new Object[]{idProduk, nama, harga, jumlah, subtotal});
+                for (int i = 0; i < modelProduk.getRowCount(); i++) {
+                    if ((int) modelProduk.getValueAt(i, 0) == idProduk) {
+                        int stokLama = (int) modelProduk.getValueAt(i, 3);
+                        modelProduk.setValueAt(stokLama - jumlah, i, 3);
+                        break;
+                    }
+                }
             }
         }
         if (details.isEmpty()) {
             ErrorUI.showError(this, "Tidak ada detail untuk transaksi ini!");
             return;
         }
-        // Isi keranjang dengan detail yang ada
         keranjangItems.clear();
         keranjangItems.addAll(details);
         updateKeranjangTable();
-        
+
         isEditMode = true;
         editingIdTransaksi = idTransaksi;
         btnBuatPesanan.setText("Simpan");
         btnBatalEdit.setVisible(true);
-        // Nonaktifkan sementara tombol aksi di tabel bawah agar tidak mengganggu (opsional)
-        // Tapi biarkan saja, user bisa membatalkan edit.
     }
-    
+
     private void simpanEdit() {
         if (keranjangItems.isEmpty()) {
             ErrorUI.showError(this, "Keranjang kosong! Transaksi tidak dapat disimpan.");
             return;
         }
-        // Hapus semua detail lama transaksi ini
         try {
             String sqlDelete = "DELETE FROM detail_transaksi WHERE id_transaksi = ?";
             try (var conn = Database.Koneksi.getConnection();
@@ -284,7 +352,6 @@ public class TransaksiMasukUI extends JFrame {
                 ps.setInt(1, editingIdTransaksi);
                 ps.executeUpdate();
             }
-            // Tambahkan detail baru dari keranjang
             int totalBaru = 0;
             for (Object[] item : keranjangItems) {
                 int idProduk = (int) item[0];
@@ -294,19 +361,23 @@ public class TransaksiMasukUI extends JFrame {
                 new Database.DetailTransaksiDAO().tambahDetail(editingIdTransaksi, idProduk, jumlah, hargaSatuan, subtotal);
                 totalBaru += subtotal;
             }
-            // Update total transaksi
             transaksiDAO.updateTotal(editingIdTransaksi, totalBaru);
             JOptionPane.showMessageDialog(this, "Transaksi berhasil diperbarui!");
-            // Kembali ke mode normal
             batalkanEdit();
-            loadTransaksiDiproses(); // refresh tabel
+            loadTransaksiDiproses();
+            loadProduk();
         } catch (Exception ex) {
             ex.printStackTrace();
             ErrorUI.showError(this, "Gagal menyimpan perubahan: " + ex.getMessage());
         }
     }
-    
+
     private void batalkanEdit() {
+        if (isEditMode) {
+            for (int i = 0; i < modelProduk.getRowCount() && i < originalStok.size(); i++) {
+                modelProduk.setValueAt(originalStok.get(i), i, 3);
+            }
+        }
         isEditMode = false;
         editingIdTransaksi = -1;
         keranjangItems.clear();
@@ -352,14 +423,10 @@ public class TransaksiMasukUI extends JFrame {
             JOptionPane.showMessageDialog(this, "Pembayaran berhasil!\nKembalian: Rp" + kembalian);
             kasir.prosesPembayaran(idTransaksi, total, jumlahBayar, "Tunai");
             loadTransaksiDiproses();
+            loadProduk();
         } catch (NumberFormatException ex) {
             ErrorUI.showError(this, "Masukkan angka yang valid!");
         }
-    }
-
-    private void hapusProdukDariKeranjang(int row) {
-        keranjangItems.remove(row);
-        updateKeranjangTable();
     }
 
     private void hapusTransaksi(int idTransaksi) {
@@ -376,6 +443,7 @@ public class TransaksiMasukUI extends JFrame {
                 psTrans.executeUpdate();
                 JOptionPane.showMessageDialog(this, "Transaksi berhasil dihapus");
                 loadTransaksiDiproses();
+                loadProduk();
             } catch (Exception e) {
                 e.printStackTrace();
                 ErrorUI.showError(this, "Gagal menghapus transaksi: " + e.getMessage());
@@ -418,7 +486,7 @@ public class TransaksiMasukUI extends JFrame {
         LogoutUI.logout(this);
     }
 
-    // Renderer & Editor untuk tombol hapus keranjang
+    // ========== INNER CLASS RENDERER & EDITOR ==========
     class KeranjangButtonRenderer extends JButton implements javax.swing.table.TableCellRenderer {
         public KeranjangButtonRenderer() { setOpaque(true); }
         @Override
@@ -462,7 +530,6 @@ public class TransaksiMasukUI extends JFrame {
         }
     }
 
-    // Renderer & Editor untuk tombol aksi tabel transaksi
     class AksiButtonRenderer extends JButton implements javax.swing.table.TableCellRenderer {
         private String text;
         public AksiButtonRenderer(String text) { this.text = text; setOpaque(true); }
@@ -500,13 +567,9 @@ public class TransaksiMasukUI extends JFrame {
             if (isPushed) {
                 int idTransaksi = (int) modelTransaksiDiproses.getValueAt(selectedRow, 0);
                 SwingUtilities.invokeLater(() -> {
-                    if (columnIndex == 4) {
-                        prosesPembayaran(idTransaksi);
-                    } else if (columnIndex == 5) {
-                        mulaiEdit(idTransaksi);
-                    } else if (columnIndex == 6) {
-                        hapusTransaksi(idTransaksi);
-                    }
+                    if (columnIndex == 4) prosesPembayaran(idTransaksi);
+                    else if (columnIndex == 5) mulaiEdit(idTransaksi);
+                    else if (columnIndex == 6) hapusTransaksi(idTransaksi);
                 });
             }
             isPushed = false;
