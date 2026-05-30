@@ -13,6 +13,10 @@ import org.jfree.chart.renderer.category.BarRenderer;
 import org.jfree.data.category.DefaultCategoryDataset;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.text.AbstractDocument;
+import javax.swing.text.AttributeSet;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.DocumentFilter;
 import java.awt.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -23,11 +27,19 @@ import java.time.format.DateTimeFormatter;
 public class LaporanUI extends JFrame {
     private Admin admin;
     private JComboBox<String> cbPeriode;
-    private JTextField tfStartDate, tfEndDate;
+    private JPanel filterPanel;
     private JButton btnTampilkan;
     private JPanel chartPanelContainer;
     private JLabel lblTotalPenjualan, lblTotalTransaksi, lblProdukTerjual;
     private JLabel lblPeriodeRange;
+
+    // Komponen untuk periode Hari
+    private JTextField tfStartDate, tfEndDate;
+    // Komponen untuk periode Bulan (tahun manual + combo bulan)
+    private JTextField tfTahunBulan;
+    private JComboBox<Integer> cbBulan;
+    // Komponen untuk periode Tahun (tahun manual)
+    private JTextField tfTahunTahun;
 
     public LaporanUI(Admin admin) {
         this.admin = admin;
@@ -49,12 +61,89 @@ public class LaporanUI extends JFrame {
         JPanel topPanel = new JPanel(new BorderLayout());
         topPanel.setBackground(Color.WHITE);
 
-        JPanel filterPanel = createFilterPanel();
+        // Panel filter
+        filterPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        filterPanel.setBackground(Color.WHITE);
+
+        // Inisialisasi semua komponen
+        cbPeriode = new JComboBox<>(new String[]{"Hari", "Bulan", "Tahun"});
+
+        // Komponen Hari
+        tfStartDate = new JTextField(12);
+        tfEndDate = new JTextField(12);
+
+        // Komponen Bulan
+        tfTahunBulan = new JTextField(4);
+        // Filter hanya angka dan max 4 digit
+        ((AbstractDocument) tfTahunBulan.getDocument()).setDocumentFilter(new DigitLimitFilter(4));
+        cbBulan = new JComboBox<>();
+        for (int i = 1; i <= 12; i++) cbBulan.addItem(i);
+
+        // Komponen Tahun
+        tfTahunTahun = new JTextField(4);
+        ((AbstractDocument) tfTahunTahun.getDocument()).setDocumentFilter(new DigitLimitFilter(4));
+
+        btnTampilkan = new JButton("Tampilkan");
+
+        // Listener untuk perubahan periode
+        cbPeriode.addActionListener(e -> {
+            String selected = (String) cbPeriode.getSelectedItem();
+            if ("Hari".equals(selected)) showHariComponents();
+            else if ("Bulan".equals(selected)) showBulanComponents();
+            else showTahunComponents();
+        });
+
+        // Listener tombol tampilkan
+        btnTampilkan.addActionListener(e -> {
+            String periode = (String) cbPeriode.getSelectedItem();
+            if ("Hari".equals(periode)) {
+                String start = tfStartDate.getText().trim();
+                String end = tfEndDate.getText().trim();
+                if (isDateValid(start, end)) {
+                    loadChartAndSummary(periode, start, end);
+                } else {
+                    ErrorUI.showError(LaporanUI.this, "Periode akhir tidak boleh lebih kecil dari periode awal!");
+                }
+            } else if ("Bulan".equals(periode)) {
+                String tahunStr = tfTahunBulan.getText().trim();
+                if (tahunStr.isEmpty() || !tahunStr.matches("\\d{4}")) {
+                    ErrorUI.showError(LaporanUI.this, "Tahun harus diisi dengan 4 digit angka (contoh: 2025)!");
+                    return;
+                }
+                int tahun = Integer.parseInt(tahunStr);
+                if (tahun < 1900 || tahun > 2099) {
+                    ErrorUI.showError(LaporanUI.this, "Tahun harus antara 1900 dan 2099!");
+                    return;
+                }
+                int bulan = (int) cbBulan.getSelectedItem();
+                String start = tahun + "-" + String.format("%02d", bulan) + "-01";
+                int lastDay = getLastDayOfMonth(tahun, bulan);
+                String end = tahun + "-" + String.format("%02d", bulan) + "-" + lastDay;
+                loadChartAndSummary(periode, start, end);
+            } else {
+                String tahunStr = tfTahunTahun.getText().trim();
+                if (tahunStr.isEmpty() || !tahunStr.matches("\\d{4}")) {
+                    ErrorUI.showError(LaporanUI.this, "Tahun harus diisi dengan 4 digit angka (contoh: 2025)!");
+                    return;
+                }
+                int tahun = Integer.parseInt(tahunStr);
+                if (tahun < 1900 || tahun > 9999) {
+                    ErrorUI.showError(LaporanUI.this, "Tahun harus antara 1900 sampai 9999!");
+                    return;
+                }
+                String start = tahun + "-01-01";
+                String end = tahun + "-12-31";
+                loadChartAndSummary(periode, start, end);
+            }
+        });
+
+        // Set tampilan default (Hari)
+        showHariComponents();
+
         topPanel.add(filterPanel, BorderLayout.NORTH);
 
         JPanel cardPanel = createCardPanel();
         topPanel.add(cardPanel, BorderLayout.CENTER);
-
         main.add(topPanel, BorderLayout.NORTH);
 
         chartPanelContainer = new JPanel(new BorderLayout());
@@ -68,8 +157,82 @@ public class LaporanUI extends JFrame {
 
         add(main, BorderLayout.CENTER);
 
-        // Set default periode dari tanggal pertama transaksi sampai tanggal terakhir
         setDefaultPeriod();
+    }
+
+    // Filter untuk membatasi jumlah digit dan hanya angka
+    class DigitLimitFilter extends DocumentFilter {
+        private int maxDigits;
+        public DigitLimitFilter(int max) { this.maxDigits = max; }
+        @Override
+        public void insertString(FilterBypass fb, int offset, String string, AttributeSet attr) throws BadLocationException {
+            if (string != null && string.matches("\\d*")) {
+                String newText = fb.getDocument().getText(0, fb.getDocument().getLength()) + string;
+                if (newText.length() <= maxDigits) {
+                    super.insertString(fb, offset, string, attr);
+                }
+            }
+        }
+        @Override
+        public void replace(FilterBypass fb, int offset, int length, String text, AttributeSet attrs) throws BadLocationException {
+            if (text != null && text.matches("\\d*")) {
+                String current = fb.getDocument().getText(0, fb.getDocument().getLength());
+                String newText = current.substring(0, offset) + text + current.substring(offset + length);
+                if (newText.length() <= maxDigits) {
+                    super.replace(fb, offset, length, text, attrs);
+                }
+            }
+        }
+    }
+
+    private void showHariComponents() {
+        filterPanel.removeAll();
+        filterPanel.add(new JLabel("Periode:"));
+        filterPanel.add(cbPeriode);
+        filterPanel.add(new JLabel("Dari:"));
+        filterPanel.add(tfStartDate);
+        filterPanel.add(new JLabel("Sampai:"));
+        filterPanel.add(tfEndDate);
+        filterPanel.add(btnTampilkan);
+        filterPanel.revalidate();
+        filterPanel.repaint();
+    }
+
+    private void showBulanComponents() {
+        filterPanel.removeAll();
+        filterPanel.add(new JLabel("Periode:"));
+        filterPanel.add(cbPeriode);
+        filterPanel.add(new JLabel("Tahun:"));
+        filterPanel.add(tfTahunBulan);
+        filterPanel.add(new JLabel("Bulan:"));
+        filterPanel.add(cbBulan);
+        filterPanel.add(btnTampilkan);
+        filterPanel.revalidate();
+        filterPanel.repaint();
+        // Set default tahun sekarang jika kosong
+        if (tfTahunBulan.getText().isEmpty()) {
+            tfTahunBulan.setText(String.valueOf(LocalDate.now().getYear()));
+        }
+    }
+
+    private void showTahunComponents() {
+        filterPanel.removeAll();
+        filterPanel.add(new JLabel("Periode:"));
+        filterPanel.add(cbPeriode);
+        filterPanel.add(new JLabel("Tahun:"));
+        filterPanel.add(tfTahunTahun);
+        filterPanel.add(btnTampilkan);
+        filterPanel.revalidate();
+        filterPanel.repaint();
+        if (tfTahunTahun.getText().isEmpty()) {
+            tfTahunTahun.setText(String.valueOf(LocalDate.now().getYear()));
+        }
+    }
+
+    private int getLastDayOfMonth(int year, int month) {
+        Calendar cal = Calendar.getInstance();
+        cal.set(year, month - 1, 1);
+        return cal.getActualMaximum(Calendar.DAY_OF_MONTH);
     }
 
     private void setDefaultPeriod() {
@@ -81,8 +244,7 @@ public class LaporanUI extends JFrame {
             tfEndDate.setText(today.format(DateTimeFormatter.ISO_LOCAL_DATE));
         } else {
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
-            Date minDate = null;
-            Date maxDate = null;
+            Date minDate = null, maxDate = null;
             for (Object[] row : all) {
                 java.sql.Timestamp ts = (java.sql.Timestamp) row[1];
                 Date tgl = new Date(ts.getTime());
@@ -93,6 +255,101 @@ public class LaporanUI extends JFrame {
             tfEndDate.setText(sdf.format(maxDate));
         }
         loadChartAndSummary("Hari", tfStartDate.getText(), tfEndDate.getText());
+    }
+
+    private void loadChartAndSummary(String periode, String startDate, String endDate) {
+        TransaksiDAO dao = new TransaksiDAO();
+        List<Object[]> all = dao.getAllTransaksi();
+
+        Map<String, Integer> dataMap = new LinkedHashMap<>();
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+        long totalPenjualan = 0;
+        long totalTransaksi = 0;
+        long totalProduk = 0;
+
+        try {
+            Date start = sdf.parse(startDate);
+            Date end = sdf.parse(endDate);
+            Calendar calEnd = Calendar.getInstance();
+            calEnd.setTime(end);
+            calEnd.add(Calendar.DAY_OF_MONTH, 1);
+            Date endPlusOne = calEnd.getTime();
+
+            Calendar cal = Calendar.getInstance();
+            for (Object[] row : all) {
+                if (!"selesai".equals(row[4])) continue;
+                java.sql.Timestamp ts = (java.sql.Timestamp) row[1];
+                Date tgl = new Date(ts.getTime());
+                if (tgl.before(start) || !tgl.before(endPlusOne)) continue;
+
+                String key;
+                cal.setTime(tgl);
+                if ("Hari".equals(periode)) {
+                    key = sdf.format(tgl);
+                } else if ("Bulan".equals(periode)) {
+                    key = cal.get(Calendar.YEAR) + "-" + (cal.get(Calendar.MONTH) + 1);
+                } else {
+                    key = String.valueOf(cal.get(Calendar.YEAR));
+                }
+                int total = (int) row[2];
+                dataMap.put(key, dataMap.getOrDefault(key, 0) + total);
+                totalPenjualan += total;
+                totalTransaksi++;
+            }
+            totalProduk = dao.getTotalProdukTerjualInRange(start, endPlusOne);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        lblTotalPenjualan.setText(formatRupiah(totalPenjualan));
+        lblTotalTransaksi.setText(String.valueOf(totalTransaksi));
+        lblProdukTerjual.setText(String.valueOf(totalProduk));
+        lblPeriodeRange.setText("Periode " + formatTanggal(startDate) + " - " + formatTanggal(endDate));
+
+        DefaultCategoryDataset dataset = new DefaultCategoryDataset();
+        List<String> sortedKeys = new ArrayList<>(dataMap.keySet());
+        Collections.sort(sortedKeys);
+        for (String key : sortedKeys) {
+            dataset.addValue(dataMap.get(key), "Penjualan", key);
+        }
+
+        JFreeChart chart = ChartFactory.createBarChart("", "Periode", "Jumlah (Rp)", dataset);
+        chart.setBackgroundPaint(Color.WHITE);
+        CategoryPlot plot = chart.getCategoryPlot();
+        BarRenderer renderer = (BarRenderer) plot.getRenderer();
+        renderer.setSeriesPaint(0, new Color(0, 153, 0));
+        renderer.setSeriesOutlinePaint(0, Color.BLACK);
+
+        ChartPanel chartPanel = new ChartPanel(chart);
+        chartPanelContainer.removeAll();
+        chartPanelContainer.add(chartPanel, BorderLayout.CENTER);
+        chartPanelContainer.revalidate();
+        chartPanelContainer.repaint();
+    }
+
+    private String formatRupiah(long amount) {
+        return "Rp" + String.format("%,d", amount).replace(',', '.');
+    }
+
+    private String formatTanggal(String yyyyMMdd) {
+        try {
+            SimpleDateFormat input = new SimpleDateFormat("yyyy-MM-dd");
+            SimpleDateFormat output = new SimpleDateFormat("dd MMM yyyy", new Locale("id", "ID"));
+            return output.format(input.parse(yyyyMMdd));
+        } catch (Exception e) {
+            return yyyyMMdd;
+        }
+    }
+
+    private boolean isDateValid(String start, String end) {
+        try {
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+            Date d1 = sdf.parse(start);
+            Date d2 = sdf.parse(end);
+            return !d2.before(d1);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private JPanel createSidebar() {
@@ -127,32 +384,6 @@ public class LaporanUI extends JFrame {
         logoutBtn.addActionListener(e -> logout());
         panel.add(Box.createVerticalGlue());
         panel.add(logoutBtn);
-        return panel;
-    }
-
-    private JPanel createFilterPanel() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        panel.setBackground(Color.WHITE);
-        panel.add(new JLabel("Periode:"));
-        cbPeriode = new JComboBox<>(new String[]{"Hari", "Bulan", "Tahun"});
-        panel.add(cbPeriode);
-        panel.add(new JLabel("Dari:"));
-        tfStartDate = new JTextField(12);
-        panel.add(tfStartDate);
-        panel.add(new JLabel("Sampai:"));
-        tfEndDate = new JTextField(12);
-        panel.add(tfEndDate);
-        btnTampilkan = new JButton("Tampilkan");
-        btnTampilkan.addActionListener(e -> {
-            String start = tfStartDate.getText().trim();
-            String end = tfEndDate.getText().trim();
-            if (isDateValid(start, end)) {
-                loadChartAndSummary((String) cbPeriode.getSelectedItem(), start, end);
-            } else {
-                ErrorUI.showError(this, "Periode akhir tidak boleh lebih kecil dari periode awal!");
-            }
-        });
-        panel.add(btnTampilkan);
         return panel;
     }
 
@@ -216,107 +447,6 @@ public class LaporanUI extends JFrame {
         panel.add(card2);
         panel.add(card3);
         return panel;
-    }
-
-    private void loadChartAndSummary(String periode, String startDate, String endDate) {
-        TransaksiDAO dao = new TransaksiDAO();
-        List<Object[]> all = dao.getAllTransaksi();
-
-        Map<String, Integer> dataMap = new LinkedHashMap<>();
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
-        long totalPenjualan = 0;
-        long totalTransaksi = 0;
-        long totalProduk = 0;
-
-        try {
-            Date start = sdf.parse(startDate);
-            Date end = sdf.parse(endDate);
-            Calendar calEnd = Calendar.getInstance();
-            calEnd.setTime(end);
-            calEnd.add(Calendar.DAY_OF_MONTH, 1);
-            Date endPlusOne = calEnd.getTime();
-
-            Calendar cal = Calendar.getInstance();
-
-            for (Object[] row : all) {
-                if (!"selesai".equals(row[4])) continue;
-                java.sql.Timestamp ts = (java.sql.Timestamp) row[1];
-                Date tgl = new Date(ts.getTime());
-                if (tgl.before(start) || !tgl.before(endPlusOne)) continue;
-
-                String key;
-                cal.setTime(tgl);
-                if ("Hari".equals(periode)) {
-                    key = sdf.format(tgl);
-                } else if ("Bulan".equals(periode)) {
-                    key = cal.get(Calendar.YEAR) + "-" + (cal.get(Calendar.MONTH) + 1);
-                } else {
-                    key = String.valueOf(cal.get(Calendar.YEAR));
-                }
-                int total = (int) row[2];
-                dataMap.put(key, dataMap.getOrDefault(key, 0) + total);
-                totalPenjualan += total;
-                totalTransaksi++;
-            }
-
-            // Hitung total produk terjual dalam rentang
-            totalProduk = dao.getTotalProdukTerjualInRange(start, endPlusOne);
-
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        lblTotalPenjualan.setText(formatRupiah(totalPenjualan));
-        lblTotalTransaksi.setText(String.valueOf(totalTransaksi));
-        lblProdukTerjual.setText(String.valueOf(totalProduk));
-
-        lblPeriodeRange.setText("Periode " + formatTanggal(startDate) + " - " + formatTanggal(endDate));
-
-        DefaultCategoryDataset dataset = new DefaultCategoryDataset();
-        List<String> sortedKeys = new ArrayList<>(dataMap.keySet());
-        Collections.sort(sortedKeys);
-        for (String key : sortedKeys) {
-            dataset.addValue(dataMap.get(key), "Penjualan", key);
-        }
-
-        JFreeChart chart = ChartFactory.createBarChart(
-                "", "Periode", "Jumlah (Rp)", dataset);
-        chart.setBackgroundPaint(Color.WHITE);
-        CategoryPlot plot = chart.getCategoryPlot();
-        BarRenderer renderer = (BarRenderer) plot.getRenderer();
-        renderer.setSeriesPaint(0, new Color(0, 153, 0));
-        renderer.setSeriesOutlinePaint(0, Color.BLACK);
-
-        ChartPanel chartPanel = new ChartPanel(chart);
-        chartPanelContainer.removeAll();
-        chartPanelContainer.add(chartPanel, BorderLayout.CENTER);
-        chartPanelContainer.revalidate();
-        chartPanelContainer.repaint();
-    }
-
-    private String formatRupiah(long amount) {
-        return "Rp" + String.format("%,d", amount).replace(',', '.');
-    }
-
-    private String formatTanggal(String yyyyMMdd) {
-        try {
-            SimpleDateFormat input = new SimpleDateFormat("yyyy-MM-dd");
-            SimpleDateFormat output = new SimpleDateFormat("dd MMM yyyy", new Locale("id", "ID"));
-            return output.format(input.parse(yyyyMMdd));
-        } catch (Exception e) {
-            return yyyyMMdd;
-        }
-    }
-
-    private boolean isDateValid(String start, String end) {
-        try {
-            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
-            Date d1 = sdf.parse(start);
-            Date d2 = sdf.parse(end);
-            return !d2.before(d1);
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     private void logout() {
